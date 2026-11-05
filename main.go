@@ -33,12 +33,8 @@ type buildstr struct {
 
 func (b *buildstr) Reset() {
 	b.builder.Reset()
-	for key := range b.table {
-		delete(b.table, key)
-	}
-	for key := range b.printed {
-		delete(b.printed, key)
-	}
+	clear(b.table)
+	clear(b.printed)
 }
 
 func (b *buildstr) Format() string {
@@ -52,6 +48,9 @@ func (b *buildstr) Format() string {
 	// Append new fields to known columns.
 	// Keep fileds order with same input.
 	if len(newFields) > 0 {
+		for _, field := range newFields {
+			b.orderSet[field] = struct{}{}
+		}
 		b.orderCustom = append(b.orderCustom, newFields...)
 
 		sort.Slice(b.orderCustom,
@@ -120,6 +119,20 @@ func makeSet(values ...string) map[string]struct{} {
 	return set
 }
 
+// unmarshalLine decodes one input line into b.table; on error it echoes the
+// raw line to stdout and the error to stderr.
+func unmarshalLine(b *buildstr, line []byte) error {
+	if err := sonic.Unmarshal(line, &b.table); err != nil {
+		os.Stdout.Write(line)
+		os.Stdout.Write([]byte{'\n'})
+		os.Stderr.WriteString(err.Error())
+		os.Stderr.Write([]byte{'\n'})
+		b.Reset() // failed unmarshal leaves partial keys in b.table
+		return err
+	}
+	return nil
+}
+
 func main() {
 	var (
 		withField = flag.Bool("field", false, "Prepend field name to column")
@@ -142,6 +155,7 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Split(bufio.ScanLines)
+	scanner.Buffer(make([]byte, 4<<10), 1<<20)
 
 	var fmter = buildstr{
 		builder:     &strings.Builder{},
@@ -155,17 +169,11 @@ func main() {
 	}
 
 	for scanner.Scan() {
-		err := sonic.Unmarshal(scanner.Bytes(), &fmter.table)
-		if err != nil {
-			os.Stdout.Write(scanner.Bytes())
-			os.Stdout.Write([]byte{'\n'})
-			os.Stderr.WriteString(err.Error())
-			os.Stderr.Write([]byte{'\n'})
+		if err := unmarshalLine(&fmter, scanner.Bytes()); err != nil {
 			continue
 		}
 
-		_, err = os.Stdout.WriteString(fmter.Format())
-		if err != nil {
+		if _, err := os.Stdout.WriteString(fmter.Format()); err != nil {
 			os.Stderr.WriteString(err.Error())
 			os.Stderr.Write([]byte{'\n'})
 			os.Exit(-1)

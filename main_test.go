@@ -95,3 +95,58 @@ func TestBuildstrFormatEmpty(t *testing.T) {
 		t.Errorf("Format() on empty table = %q, want \"\"", got)
 	}
 }
+
+// TestBuildstrFormatNoOrderCustomDups pins that repeated Format() calls with the
+// same custom field add it to orderCustom exactly once. If orderSet is not
+// updated on append, every line re-appends the field and Format() degrades to O(n^2).
+func TestBuildstrFormatNoOrderCustomDups(t *testing.T) {
+	b := newTestBuildstr()
+	for i := 0; i < 3; i++ {
+		b.table = map[string]sonic.NoCopyRawMessage{
+			"level":   []byte(`"info"`),
+			"message": []byte(`"hello"`),
+			"count":   []byte(`42`),
+		}
+		if got := b.Format(); got == "" {
+			t.Fatalf("Format() on iteration %d = empty", i)
+		}
+		b.Reset()
+	}
+	if len(b.orderCustom) != 1 || b.orderCustom[0] != "count" {
+		t.Errorf("after 3 Format() calls orderCustom = %v, want exactly [\"count\"]", b.orderCustom)
+	}
+}
+
+// TestNoStaleFieldsAfterUnmarshalError mirrors the main loop across three lines:
+// valid line introducing field "a" -> invalid line (unmarshal error) -> valid
+// line without "a". The error branch must not leave partial keys in b.table,
+// otherwise field "a" leaks into the third line's output.
+func TestNoStaleFieldsAfterUnmarshalError(t *testing.T) {
+	b := newTestBuildstr()
+
+	// line 1: valid, introduces custom field "a"
+	if err := unmarshalLine(b, []byte(`{"time":"t1","a":"1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Format(); got == "" {
+		t.Fatal("Format() on line 1 = empty")
+	}
+	b.Reset()
+
+	// line 2: invalid — unmarshal must fail
+	if err := unmarshalLine(b, []byte(`{"a":"1","b":`)); err == nil {
+		t.Fatal("line 2: unmarshalLine succeeded on invalid JSON")
+	}
+
+	// line 3: valid, without field "a"
+	if err := unmarshalLine(b, []byte(`{"time":"t2"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := b.Format()
+	if !strings.Contains(got, "t2") {
+		t.Fatalf("line 3 output missing time value: %q", got)
+	}
+	if strings.Contains(got, "1") {
+		t.Errorf("stale field from invalid line leaked into line 3: %q", got)
+	}
+}
