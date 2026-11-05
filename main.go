@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/bytedance/sonic"
 )
 
 var reservedOrder = []string{"time", "level", "trace_id", "dump", "error", "message"}
@@ -19,7 +20,7 @@ var reservedOrder = []string{"time", "level", "trace_id", "dump", "error", "mess
 type buildstr struct {
 	builder *strings.Builder
 
-	table   map[string]json.RawMessage
+	table   map[string]sonic.NoCopyRawMessage
 	printed map[string]struct{}
 
 	order       []string
@@ -53,7 +54,7 @@ func (b *buildstr) Format() string {
 	if len(newFields) > 0 {
 		b.orderCustom = append(b.orderCustom, newFields...)
 
-		sort.SliceStable(b.orderCustom,
+		sort.Slice(b.orderCustom,
 			func(i, j int) bool { return b.orderCustom[i] < b.orderCustom[j] },
 		)
 	}
@@ -106,7 +107,7 @@ func (b *buildstr) format(raw []byte) string {
 		return string(raw)
 	default:
 		var v interface{}
-		json.Unmarshal(raw, &v)
+		sonic.Unmarshal(raw, &v)
 		return fmt.Sprint(v)
 	}
 }
@@ -144,7 +145,7 @@ func main() {
 
 	var fmter = buildstr{
 		builder:     &strings.Builder{},
-		table:       map[string]json.RawMessage{},
+		table:       map[string]sonic.NoCopyRawMessage{},
 		printed:     map[string]struct{}{},
 		order:       reservedOrder,
 		orderCustom: []string{},
@@ -154,7 +155,7 @@ func main() {
 	}
 
 	for scanner.Scan() {
-		err := json.Unmarshal(scanner.Bytes(), &fmter.table)
+		err := sonic.Unmarshal(scanner.Bytes(), &fmter.table)
 		if err != nil {
 			os.Stdout.Write(scanner.Bytes())
 			os.Stdout.Write([]byte{'\n'})
